@@ -22,6 +22,18 @@ internal static class Program
             return;
         }
 
-        Application.Run(new MainForm());
+        // One copy at a time. Starting it again just opens the window of the one already running.
+        using var single = new Mutex(true, @"Local\SuperScreenshot.Running", out bool first);
+        using var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\SuperScreenshot.Show");
+        if (!first)
+        {
+            showSignal.Set();
+            return;
+        }
+
+        // "--tray" is how it starts with Windows: no window, just the tray icon and hotkey.
+        var app = new TrayApp(startHidden: args.Contains("--tray"));
+        ThreadPool.RegisterWaitForSingleObject(showSignal, (_, _) => app.ShowFromOtherInstance(), null, Timeout.Infinite, executeOnlyOnce: false);
+        Application.Run(app);
     }
 }

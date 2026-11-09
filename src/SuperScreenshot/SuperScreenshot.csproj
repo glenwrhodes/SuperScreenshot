@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="SuperScreenshot.Tests" />
+    <EmbeddedResource Include="app.ico" LogicalName="SuperScreenshot.app.ico" />
   </ItemGroup>
 
 </Project>

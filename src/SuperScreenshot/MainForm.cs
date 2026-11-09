@@ -5,9 +5,6 @@ namespace SuperScreenshot;
 /// <summary>The app's one window: a New button, and the preview of the last screenshot.</summary>
 internal sealed class MainForm : Form
 {
-    const int HotkeyId = 0x5353;
-    const string HotkeyText = "Ctrl+Alt+S";
-
     static readonly Color Accent = Color.FromArgb(43, 136, 255);
     static readonly Color BarBack = Color.FromArgb(246, 247, 249);
     static readonly Color ViewerBack = Color.FromArgb(228, 231, 236);
@@ -21,7 +18,11 @@ internal sealed class MainForm : Form
 
     Bitmap? image;
     CaptureSession? session;
-    bool hotkeyRegistered;
+    bool starting;
+    bool closingForReal;
+
+    /// <summary>Raised when the user closes the window and it goes to the tray instead.</summary>
+    public event Action? HiddenToTray;
 
     public MainForm()
     {
@@ -34,7 +35,7 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(480, 200);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
-        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { /* no icon is fine */ }
+        Icon = AppIcon.Get(new Size(32, 32));
 
         newButton = MakeButton("+  New", primary: true);
         copyButton = MakeButton("Copy", primary: false);
@@ -67,10 +68,11 @@ internal sealed class MainForm : Form
             ForeColor = Color.FromArgb(70, 76, 85),
             Padding = new Padding(24),
             Text =
-                $"Click New (or press {HotkeyText} anywhere) and drag to select.\n\n" +
+                $"Press {GlobalHotkey.Text} anywhere (or click New) and drag to select.\n\n" +
                 "Need more than fits on the screen? Keep dragging past the bottom edge,\n" +
                 "or turn the mouse wheel, and the page scrolls while you select.\n\n" +
-                "Your screenshot is copied to the clipboard automatically.",
+                "Your screenshot is copied to the clipboard automatically.\n" +
+                "Closing this window keeps SuperScreenshot ready in the hidden icons tray.",
         };
 
         // Fill controls first, then the toolbar, so the toolbar docks on top.
@@ -104,28 +106,43 @@ internal sealed class MainForm : Form
         return button;
     }
 
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        hotkeyRegistered = Native.RegisterHotKey(Handle, HotkeyId,
-            Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.S);
-        if (!hotkeyRegistered) status.Text = $"{HotkeyText} is in use by another app; use the New button.";
-    }
+    public void SetStatus(string text) => status.Text = text;
 
-    protected override void OnHandleDestroyed(EventArgs e)
+    /// <summary>Closing the window just hides it; the app stays ready in the tray.</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (hotkeyRegistered) Native.UnregisterHotKey(Handle, HotkeyId);
-        base.OnHandleDestroyed(e);
-    }
-
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == Native.WM_HOTKEY && (int)m.WParam == HotkeyId)
+        // The X button and Alt+F4 hide it. Windows shutdown, Task Manager and the tray's Exit really close it.
+        if (!closingForReal && e.CloseReason == CloseReason.UserClosing)
         {
-            StartCapture();
+            e.Cancel = true;
+            Hide();
+            HiddenToTray?.Invoke();
             return;
         }
-        base.WndProc(ref m);
+        base.OnFormClosing(e);
+    }
+
+    public void CloseForReal()
+    {
+        closingForReal = true;
+        Close();
+    }
+
+    /// <summary>Shows the window in front of everything, even when another app has the focus.</summary>
+    public void ShowWindow()
+    {
+        if (session != null || starting) return;
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Show();
+        IntPtr foreground = Native.GetForegroundWindow();
+        uint theirs = Native.GetWindowThreadProcessId(foreground, out _);
+        uint ours = Native.GetCurrentThreadId();
+        // Windows only lets the app in use hand over the focus, so briefly share its input state.
+        bool attached = theirs != 0 && theirs != ours && Native.AttachThreadInput(ours, theirs, true);
+        Native.SetForegroundWindow(Handle);
+        Native.BringWindowToTop(Handle);
+        if (attached) Native.AttachThreadInput(ours, theirs, false);
+        Activate();
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -139,49 +156,41 @@ internal sealed class MainForm : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    async void StartCapture()
+    public async void StartCapture()
     {
-        if (session != null) return;
+        if (session != null || starting) return;
+        starting = true;
 
-        var previousState = Visible ? WindowState : FormWindowState.Minimized;
+        bool wasVisible = Visible;
+        var previousState = WindowState;
         bool wasShowing = Visible && WindowState != FormWindowState.Minimized;
         Hide();
         if (wasShowing) await Task.Delay(250); // let the window fade out before the overlay appears
 
         var capture = new CaptureSession();
         session = capture;
+        starting = false;
         capture.Completed += result =>
         {
             session = null;
             if (result != null)
             {
                 ShowImage(result);
-                RestoreWindow(FormWindowState.Normal);
+                ShowWindow();
             }
-            else
+            else if (capture.Error != null)
             {
-                if (capture.Error != null) status.Text = "Something went wrong: " + capture.Error;
-                RestoreWindow(previousState);
+                status.Text = "Something went wrong: " + capture.Error;
+                ShowWindow();
+            }
+            else if (wasVisible)
+            {
+                // Cancelled: put the window back how it was. From the tray, stay hidden.
+                WindowState = previousState;
+                Show();
             }
         };
-
-        try
-        {
-            capture.Start();
-        }
-        catch (Exception ex)
-        {
-            session = null;
-            status.Text = "Could not start: " + ex.Message;
-            RestoreWindow(FormWindowState.Normal);
-        }
-    }
-
-    void RestoreWindow(FormWindowState state)
-    {
-        WindowState = state;
-        Show();
-        if (state != FormWindowState.Minimized) Activate();
+        capture.Start(); // reports its own failures through Completed
     }
 
     void ShowImage(Bitmap bitmap)

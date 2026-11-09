@@ -105,10 +105,10 @@ internal sealed class Overlay : Form
 internal sealed class InputHooks : IDisposable
 {
     readonly Thread thread;
-    readonly Native.HookProc mouseProc, keyProc; // kept alive for as long as the hooks are installed
+    readonly Native.HookProc? mouseProc, keyProc; // kept alive for as long as the hooks are installed
     uint threadId;
 
-    public InputHooks(Native.HookProc mouse, Native.HookProc keyboard)
+    public InputHooks(Native.HookProc? mouse, Native.HookProc? keyboard)
     {
         mouseProc = mouse;
         keyProc = keyboard;
@@ -119,9 +119,9 @@ internal sealed class InputHooks : IDisposable
             threadId = Native.GetCurrentThreadId();
             Native.PeekMessage(out _, IntPtr.Zero, 0, 0, 0); // make sure this thread has a message queue
             IntPtr module = Native.GetModuleHandle(null);
-            IntPtr mouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, mouseProc, module, 0);
-            IntPtr keyHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, keyProc, module, 0);
-            if (mouseHook == IntPtr.Zero || keyHook == IntPtr.Zero)
+            IntPtr mouseHook = mouseProc == null ? IntPtr.Zero : Native.SetWindowsHookEx(Native.WH_MOUSE_LL, mouseProc, module, 0);
+            IntPtr keyHook = keyProc == null ? IntPtr.Zero : Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, keyProc, module, 0);
+            if ((mouseProc != null && mouseHook == IntPtr.Zero) || (keyProc != null && keyHook == IntPtr.Zero))
                 failure = new InvalidOperationException("Could not install the mouse and keyboard hooks.");
             ready.Set();
             try
