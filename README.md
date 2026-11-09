@@ -45,9 +45,17 @@ wasn't an option, because something on the system (probably Windows) already own
   if the cursor is over the taskbar.
 - **Stitching** (`Tracker.cs`): about 30 times a second it grabs the window being scrolled
   and hashes every row, in vertical bands so a fixed sidebar can't spoil a match. Changed
-  rows vote on how far the content moved, and the shift with the most votes wins. Newly
-  revealed rows are added to a tall canvas. Rows that stay still while everything else moves
-  are a sticky header, sticky footer or the browser toolbar, and they aren't repeated.
+  rows vote on how far the content moved, and the shift with the most votes wins. Rows that
+  stay still while everything else moves are a sticky header, sticky footer or the browser
+  toolbar, and they aren't repeated.
+- **Which view of a row is kept:** every row passes through the window several times. The
+  view kept is the one taken when the row was nearest the middle of the window. At the edges,
+  rows may not be drawn yet, or come from a frame caught mid-redraw, and see-through headers,
+  cookie bars and floating bubbles sit there too. When you let go, it waits until the page
+  stops moving, so the last rows are fully drawn.
+- **Wheel hops** move the cursor to the page and back in one SendInput call. They go one at
+  a time, and the cursor position is never read while one is under way. Auto-scroll stops
+  by itself at the end of the page.
 - Coordinates are physical pixels throughout (per-monitor DPI aware), so it's sharp at any
   scaling.
 

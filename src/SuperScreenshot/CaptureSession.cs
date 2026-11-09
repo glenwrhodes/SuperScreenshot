@@ -51,8 +51,14 @@ internal sealed class CaptureSession
     bool armedDown, armedUp;
     int autoDirection;
     long lastScrollAt = -100000;
-    long lastHopAt = -100000;
     int framesAtScroll = -1;
+    int lastSeenOffset, zoneDirection;   // for noticing the end of the page
+    long lastMovedAt, zoneEnteredAt;
+
+    // Wheel hops (see ScrollPage). Only one at a time, and the cursor isn't read during one.
+    volatile bool hopInFlight;
+    long hopStartedAt = -100000;
+    int pendingWheel;
 
     object? lastDrawn;
 
@@ -100,7 +106,11 @@ internal sealed class CaptureSession
         if (code >= 0 && phase != Finished)
         {
             var info = Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam);
-            if (info.dwExtraInfo != ScreenHelpers.InjectedTag)
+            if (info.dwExtraInfo == ScreenHelpers.HopDoneTag)
+            {
+                hopInFlight = false; // our wheel hop is over and the cursor is back where it was
+            }
+            else if (info.dwExtraInfo != ScreenHelpers.InjectedTag)
             {
                 var point = new Point(info.pt.X, info.pt.Y);
                 switch ((int)wParam)
@@ -201,6 +211,8 @@ internal sealed class CaptureSession
         armedUp = p.Y > viewport.Top + edge;
         autoDirection = 0;
         framesAtScroll = -1;
+        lastSeenOffset = zoneDirection = 0;
+        pendingWheel = 0;
 
         var t = new Tracker(viewport);
         tracker = t;
@@ -223,6 +235,7 @@ internal sealed class CaptureSession
         var t = tracker;
         int offsetAtRelease = t.Offset; // what the user was looking at when they let go
         StopTracking();
+        if (t.HasScrolled) Settle(t);
 
         Bitmap? result;
         if (!t.HasScrolled)
@@ -293,6 +306,20 @@ internal sealed class CaptureSession
         }
     }
 
+    /// <summary>
+    /// After letting go, keep looking until the page holds still (at most about a third of a
+    /// second), so the last rows are taken fully drawn rather than mid-scroll.
+    /// </summary>
+    static void Settle(Tracker t)
+    {
+        int still = 0;
+        for (int i = 0; i < 10 && still < 2; i++)
+        {
+            Thread.Sleep(35);
+            still = t.Step() ? 0 : still + 1;
+        }
+    }
+
     void StopTracking()
     {
         stopTracking.Set();
@@ -304,10 +331,13 @@ internal sealed class CaptureSession
     {
         if (phase == Finished) return;
 
+        // A hop that never reported back (shouldn't happen) is given up on after a moment.
+        if (hopInFlight && clock.ElapsedMilliseconds - hopStartedAt > 300) hopInFlight = false;
+
         // The hook sees real mouse movement, but some things (pens, remote-control tools)
-        // move the cursor without hook events, so check where it actually is too. Skip the
-        // instant right after a wheel turn, when the cursor may be mid-hop to the anchor.
-        if (Native.GetCursorPos(out var actual) && clock.ElapsedMilliseconds - lastHopAt > 40)
+        // move the cursor without hook events, so check where it actually is too. Never while a
+        // wheel hop is under way: the cursor may really be sitting at the anchor for a moment.
+        if (!hopInFlight && Native.GetCursorPos(out var actual))
         {
             var known = Cursor;
             if (actual.X != known.X || actual.Y != known.Y)
@@ -321,6 +351,7 @@ internal sealed class CaptureSession
         {
             UpdateHashRange();
             AutoScroll(tracker);
+            SendPendingWheel();
         }
         if (dirty)
         {
@@ -359,6 +390,13 @@ internal sealed class CaptureSession
             depth = ((viewport.Top + edge) - c.Y + 1) / (double)edge;
         }
 
+        // Nothing has moved for a while although we keep scrolling: that's the end of the page,
+        // so stop (and drop the arrow) until the cursor leaves the edge and comes back.
+        long now = clock.ElapsedMilliseconds;
+        if (t.Offset != lastSeenOffset) { lastSeenOffset = t.Offset; lastMovedAt = now; }
+        if (direction != zoneDirection) { zoneDirection = direction; zoneEnteredAt = now; }
+        if (direction != 0 && now - Math.Max(lastMovedAt, zoneEnteredAt) > 600) direction = 0;
+
         if (direction != autoDirection)
         {
             autoDirection = direction;
@@ -369,11 +407,10 @@ internal sealed class CaptureSession
         // About 5 notches a second at the edge of the zone, up to about 30 when well past it.
         depth = Math.Clamp(depth, 0.1, 3.0);
         double interval = 220 / (1 + 2.2 * depth);
-        long now = clock.ElapsedMilliseconds;
         if (now - lastScrollAt < interval) return;
 
         // Don't outrun the tracker: let it see each scroll before sending the next.
-        if (t.FramesProcessed <= framesAtScroll || !t.Locked) return;
+        if (t.FramesProcessed <= framesAtScroll || !t.Locked || hopInFlight) return;
         if (t.CoveredHeight >= Tracker.MaxRows) return;
 
         ScrollPage(direction > 0 ? -WheelNotch : WheelNotch);
@@ -385,8 +422,22 @@ internal sealed class CaptureSession
     void ScrollPage(int delta)
     {
         if (phase != Dragging) return;
-        lastHopAt = clock.ElapsedMilliseconds;
-        ScreenHelpers.WheelAt(anchor, delta);
+        pendingWheel += delta;
+        SendPendingWheel();
+    }
+
+    /// <summary>
+    /// Sends the wheel turns waiting to go, unless a hop is still under way (then the next tick
+    /// does it). Overlapping hops could read the cursor mid-hop and leave it at the anchor.
+    /// </summary>
+    void SendPendingWheel()
+    {
+        if (pendingWheel == 0 || hopInFlight || phase != Dragging) return;
+        int delta = pendingWheel;
+        pendingWheel = 0;
+        hopInFlight = true;
+        hopStartedAt = clock.ElapsedMilliseconds;
+        ScreenHelpers.WheelAt(anchor, delta, back: Cursor);
     }
 
     // ---- Geometry ----

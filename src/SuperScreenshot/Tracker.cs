@@ -12,6 +12,12 @@ namespace SuperScreenshot;
 /// for the shifts that would line it up with an identical row of the old frame, and the shift
 /// with the most votes wins. Rows that stay put at the top or bottom while everything else
 /// moves are a sticky header or footer and are left out of the stitched image.
+///
+/// Which view of a row is kept: every row passes through the window several times, and the
+/// view taken when it was nearest the middle of the window wins (a newer view wins a tie).
+/// The edges are where things go wrong: rows scrolling in at the leading edge may not be
+/// drawn yet or come from a frame caught mid-redraw, and see-through sticky headers, cookie
+/// bars and floating bubbles sit at the edges too.
 /// </summary>
 internal sealed class Tracker : IDisposable
 {
@@ -31,7 +37,14 @@ internal sealed class Tracker : IDisposable
     readonly int W, H;
     readonly Func<int[]?, int[]> grab;
     readonly FrameGrabber? grabber;
-    readonly Dictionary<int, int[]> rows = new();
+    readonly Dictionary<int, Row> rows = new();
+
+    /// <summary>One stitched row, and how far from the window's edge it was when we took it.</summary>
+    sealed class Row(int width)
+    {
+        public readonly int[] Pixels = new int[width];
+        public int Quality = -1;
+    }
 
     int[]? reference;   // last frame whose position we know
     int[]? spare;       // buffer to reuse for the next grab
@@ -109,7 +122,7 @@ internal sealed class Tracker : IDisposable
         if (reference == null)
         {
             reference = grab(null);
-            for (int y = 0; y < H; y++) Store(y, reference, y);
+            for (int y = 0; y < H; y++) Store(y, reference, y, Math.Min(y, H - 1 - y));
             covTop = 0;
             covBottom = H;
             frames++;
@@ -189,11 +202,11 @@ internal sealed class Tracker : IDisposable
         int y0 = Math.Max(document.Top, covTop), y1 = Math.Min(document.Bottom, covBottom);
         if (x1 - x0 < 1 || y1 - y0 < 1) return null;
         return Pixels.Build(x1 - x0, y1 - y0, y =>
-            rows.TryGetValue(y0 + y, out var row) ? (row, x0) : (null, 0));
+            rows.TryGetValue(y0 + y, out var row) ? (row.Pixels, x0) : (null, 0));
     }
 
     /// <summary>One stitched row (for tests).</summary>
-    internal int[]? RowAt(int documentRow) => rows.TryGetValue(documentRow, out var row) ? row : null;
+    internal int[]? RowAt(int documentRow) => rows.TryGetValue(documentRow, out var row) ? row.Pixels : null;
 
     void Accept(int[] frame)
     {
@@ -266,38 +279,32 @@ internal sealed class Tracker : IDisposable
         int newOffset = offset + shift;
         bool room = covBottom - covTop < MaxRows;
 
-        if (shift > 0)
+        if (room)
         {
-            // Scrolling down. If we're at the bottom of what we have, the old frame's footer is
-            // sitting there; let the new frame write over it.
-            bool atEdge = covBottom <= offset + H;
-            int from = atEdge ? Math.Min(covBottom, offset + H - footer) : covBottom;
-            int reach = newOffset + H - footer;
-            if (room)
+            if (shift > 0)
             {
-                for (int y = header; y < H - footer; y++)
+                // Scrolling down. If we're at the bottom of what we have, the old frame's footer is
+                // sitting there: drop it, so the page underneath replaces it.
+                if (covBottom <= offset + H)
                 {
-                    int row = y + newOffset;
-                    if (row >= from) Store(row, frame, y);
+                    Forget(offset + H - footer, covBottom);
+                    covBottom = Math.Min(covBottom, offset + H - footer);
                 }
-                covBottom = atEdge ? Math.Max(from, reach) : Math.Max(covBottom, reach);
+                covBottom = Math.Max(covBottom, newOffset + H - footer);
             }
-        }
-        else
-        {
-            // Scrolling up: the same, mirrored, for a sticky header.
-            bool atEdge = covTop >= offset;
-            int to = atEdge ? Math.Max(covTop, offset + header) : covTop;
-            int reach = newOffset + header;
-            if (room)
+            else
             {
-                for (int y = header; y < H - footer; y++)
+                // Scrolling up: the same, mirrored, for a sticky header.
+                if (covTop >= offset)
                 {
-                    int row = y + newOffset;
-                    if (row < to) Store(row, frame, y);
+                    Forget(covTop, offset + header);
+                    covTop = Math.Max(covTop, offset + header);
                 }
-                covTop = atEdge ? Math.Min(to, reach) : Math.Min(covTop, reach);
+                covTop = Math.Min(covTop, newOffset + header);
             }
+
+            int last = H - footer - 1;
+            for (int y = header; y <= last; y++) Store(y + newOffset, frame, y, Math.Min(y - header, last - y));
         }
 
         offset = newOffset;
@@ -323,14 +330,24 @@ internal sealed class Tracker : IDisposable
         return count;
     }
 
-    void Store(int documentRow, int[] frame, int y)
+    /// <summary>Keeps this view of a row if it's at least as central as the one we have.</summary>
+    void Store(int documentRow, int[] frame, int y, int quality)
     {
         if (!rows.TryGetValue(documentRow, out var row))
         {
-            row = new int[W];
+            row = new Row(W);
             rows[documentRow] = row;
         }
-        Array.Copy(frame, y * W, row, 0, W);
+        if (quality < row.Quality) return;
+        Array.Copy(frame, y * W, row.Pixels, 0, W);
+        row.Quality = quality;
+    }
+
+    /// <summary>Marks rows as known to be wrong (an old sticky footer), so any later view replaces them.</summary>
+    void Forget(int from, int to)
+    {
+        for (int r = from; r < to; r++)
+            if (rows.TryGetValue(r, out var row)) row.Quality = -1;
     }
 
     void EnsureScratch(int n)

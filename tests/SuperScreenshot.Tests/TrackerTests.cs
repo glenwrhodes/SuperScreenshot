@@ -205,6 +205,67 @@ public class TrackerTests
     }
 
     [Fact]
+    public void TornFrame_DoesNotLeaveDoubledLines()
+    {
+        // While scrolling fast, a grab can catch the window half-updated: the top part at the new
+        // position and the rest still at an in-between one. That used to leave a seam where a few
+        // lines repeat.
+        var page = new Page(4000, seed: 15);
+        var torn = Frame(page, 200, 0, 0);
+        var lagging = Frame(page, 115, 0, 0);
+        Array.Copy(lagging, 520 * W, torn, 520 * W, (H - 520) * W);
+        var frames = new Queue<int[]>(new[]
+        {
+            Frame(page, 0, 0, 0), Frame(page, 100, 0, 0), torn, Frame(page, 300, 0, 0), Frame(page, 420, 0, 0),
+        });
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        while (frames.Count > 0) tracker.Step();
+
+        Assert.Equal(420, tracker.Offset);
+        for (int d = 0; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
+    [Fact]
+    public void RowsCaughtBeforeTheyWereDrawn_AreFilledInByLaterFrames()
+    {
+        // Browsers can show newly scrolled-in rows blank for a moment until they're painted.
+        var page = new Page(4000, seed: 16);
+        var unpainted = Frame(page, 250, 0, 0);
+        Array.Fill(unpainted, 0xFFFFFF, (H - 180) * W, 180 * W);
+        var frames = new Queue<int[]>(new[]
+        {
+            Frame(page, 0, 0, 0), Frame(page, 120, 0, 0), unpainted, Frame(page, 330, 0, 0), Frame(page, 600, 0, 0),
+        });
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        while (frames.Count > 0) tracker.Step();
+
+        Assert.Equal(600, tracker.Offset);
+        for (int d = 0; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
+    [Fact]
+    public void SeeThroughStickyHeader_IsNotPaintedOverThePage()
+    {
+        // A translucent header (blurred, or tinted like rgba white) shows the content scrolling
+        // under it, so it changes every frame and isn't recognised as static. It must still not
+        // end up stamped over the page every few hundred pixels.
+        var page = new Page(5000, seed: 17);
+        const int header = 70;
+        var frames = new Queue<int[]>(Walk(0, 3000, seed: 9).Select(scroll =>
+        {
+            var frame = Frame(page, scroll, 0, 0);
+            for (int i = 0; i < header * W; i++) frame[i] = (frame[i] >> 2 & 0x3F3F3F) + 0xA0A0A0; // header tinted over content
+            return frame;
+        }));
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        while (frames.Count > 0) tracker.Step();
+
+        Assert.Equal(3000, tracker.Offset);
+        // Only the very top was never seen anywhere but under the header.
+        for (int d = header; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
+    [Fact]
     public void SmallChangeInPlace_IsNotAScroll()
     {
         var page = new Page(3000, seed: 12);
