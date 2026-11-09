@@ -21,6 +21,11 @@ internal static class Program
             Environment.ExitCode = ScrollTest.Run(args);
             return;
         }
+        if (args.Length > 0 && args[0] == "--replay")
+        {
+            Environment.ExitCode = ScrollTest.Replay(args);
+            return;
+        }
 
         // "--exit" asks the running copy to quit (the uninstaller uses it) and waits until it has.
         if (args.Contains("--exit"))

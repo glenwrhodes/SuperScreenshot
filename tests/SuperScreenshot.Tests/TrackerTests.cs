@@ -13,7 +13,7 @@ public class TrackerTests
     /// <summary>A tall page that looks a bit like text: lines of speckled ink with blank gaps.</summary>
     sealed class Page
     {
-        public readonly int[][] Rows;
+        public int[][] Rows;
 
         public Page(int height, int seed)
         {
@@ -263,6 +263,113 @@ public class TrackerTests
         Assert.Equal(3000, tracker.Offset);
         // Only the very top was never seen anywhere but under the header.
         for (int d = header; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
+    /// <summary>A File Explorer-like list: every row has the same icon, date and type; only a narrow name differs.</summary>
+    static Page ListPage(int rowsCount, int rowHeight, int seed)
+    {
+        var random = new Random(seed);
+        var sameEverywhere = new int[rowHeight][];
+        for (int y = 0; y < rowHeight; y++)
+        {
+            var row = new int[W];
+            Array.Fill(row, 0xFFFFFF);
+            if (y > 6 && y < rowHeight - 6)
+            {
+                for (int x = 12; x < 30; x++) row[x] = 0xE8B830;                                  // folder icon
+                for (int x = 330; x < 650; x++) if ((x + y * 3) % 7 < 3) row[x] = 0x606060;     // "2026-10-31 12:24 PM  File folder"
+            }
+            sameEverywhere[y] = row;
+        }
+        var page = new Page(1, seed);
+        Array.Resize(ref page.Rows, rowsCount * rowHeight);
+        for (int r = 0; r < rowsCount; r++)
+        {
+            int nameLength = random.Next(40, 160);
+            var name = new int[rowHeight][];
+            for (int y = 0; y < rowHeight; y++)
+            {
+                var row = (int[])sameEverywhere[y].Clone();
+                if (y > 8 && y < rowHeight - 8)
+                    for (int x = 40; x < 40 + nameLength; x++)
+                        if (random.Next(3) == 0) row[x] = 0x202020;                                // the name: the only unique part
+                page.Rows[r * rowHeight + y] = row;
+            }
+        }
+        return page;
+    }
+
+    [Fact]
+    public void HoverEffects_DoNotThrowOffAList()
+    {
+        // In File Explorer the row under the mouse lights up and a tooltip pops up. Our wheel
+        // hops put the mouse on the list for a moment, so some frames have them and some don't.
+        const int rowHeight = 33, hoverY = 400;
+        var page = ListPage(300, rowHeight, seed: 19);
+        var random = new Random(3);
+        var path = Walk(0, 2400, seed: 12, maxStep: 200).ToList();
+        var frames = new Queue<int[]>(path.Select(scroll =>
+        {
+            var frame = Frame(page, scroll, header: 40, footer: 30);
+            if (random.Next(2) == 0)
+            {
+                // Highlight the whole row under the mouse.
+                int rowTop = (hoverY + scroll) / rowHeight * rowHeight - scroll;
+                for (int y = Math.Max(40, rowTop); y < Math.Min(H - 30, rowTop + rowHeight); y++)
+                    for (int x = 0; x < W; x++)
+                        if (frame[y * W + x] == 0xFFFFFF) frame[y * W + x] = 0xE5F3FF;
+            }
+            if (random.Next(3) == 0)
+            {
+                // A tooltip box next to the mouse.
+                for (int y = hoverY + 14; y < hoverY + 74; y++)
+                    for (int x = 220; x < 560; x++)
+                        frame[y * W + x] = (y == hoverY + 14 || x == 220) ? 0x767676 : ((x * 7 + y * 3) % 11 < 2 ? 0x303030 : 0xF8F8F8);
+            }
+            return frame;
+        }));
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        while (frames.Count > 0) tracker.Step();
+
+        Assert.Equal(2400, tracker.Offset);
+    }
+
+    [Fact]
+    public void HoverHighlightFollowingTheMouse_IsNotAScroll()
+    {
+        // Dragging down a File Explorer list without scrolling: the highlighted row follows the
+        // mouse one row at a time. Since rows look alike, that looks like a one-row scroll.
+        const int rowHeight = 43;
+        var page = ListPage(200, rowHeight, seed: 20);
+        var frames = new Queue<int[]>(Enumerable.Range(2, 14).Select(row =>
+        {
+            var frame = Frame(page, 0, header: 40, footer: 30);
+            for (int y = row * rowHeight; y < (row + 1) * rowHeight && y < H - 30; y++)
+                for (int x = 0; x < W; x++)
+                    if (frame[y * W + x] == 0xFFFFFF) frame[y * W + x] = 0xE5F3FF;
+            return frame;
+        }));
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        while (frames.Count > 0)
+        {
+            tracker.Step();
+            Assert.True(tracker.Locked, "a hover change must not stall tracking");
+        }
+
+        Assert.False(tracker.HasScrolled, $"the hover was taken for a scroll (offset {tracker.Offset})");
+    }
+
+    [Fact]
+    public void ListOfNearIdenticalRows_IsNotOffByARow()
+    {
+        const int rowHeight = 33;
+        var page = ListPage(300, rowHeight, seed: 18);
+        // Scroll by awkward amounts, including exact multiples of the row height.
+        var path = new[] { 0, 33, 99, 150, 231, 300, 333, 432, 500, 561, 660, 700, 792, 891, 990, 1100, 1188, 1300, 1386, 1500 };
+        using var tracker = Run(page, path, header: 40, footer: 30);
+
+        Assert.Equal(1500, tracker.Offset);
+        for (int d = 40; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
     }
 
     [Fact]

@@ -32,6 +32,13 @@ internal sealed class Tracker : IDisposable
     const int MinHashWidth = 320;
     const int MaxBands = 8;
 
+    /// <summary>
+    /// Percentage of the changed rows a shift must explain to count as a scroll. Taking a change
+    /// for a scroll throws the whole capture off; missing a scroll for one frame costs nothing
+    /// (the next frame catches up), so this errs on the side of "not a scroll".
+    /// </summary>
+    const int MinExplained = 15;
+
     public Rectangle Viewport { get; }
 
     readonly int W, H;
@@ -90,6 +97,9 @@ internal sealed class Tracker : IDisposable
     /// <summary>False when the last frame could not be matched to the one before it.</summary>
     public bool Locked => locked;
 
+    /// <summary>What the last <see cref="Step"/> saw and decided, for diagnosing (see --scroll-test).</summary>
+    public string LastDecision { get; private set; } = "";
+
     /// <summary>Number of frames looked at so far.</summary>
     public int FramesProcessed => frames;
 
@@ -146,13 +156,30 @@ internal sealed class Tracker : IDisposable
         }
         HashRows(frame, x0, x1, bands, hashNew, flatNew);
 
-        int changed = 0, changedDetailed = 0;
+        int changed = 0, changedDetailed = 0, unchangedDetailed = 0, changedLines = 0;
         for (int i = 0; i < n; i++)
         {
-            if (hashRef[i] == hashNew[i]) continue;
+            if (hashRef[i] == hashNew[i])
+            {
+                if (!flatNew[i]) unchangedDetailed++;
+                continue;
+            }
             changed++;
             if (!flatNew[i]) changedDetailed++;
         }
+        for (int y = 0; y < H; y++)
+        {
+            for (int b = 0; b < bands; b++)
+            {
+                int i = b * H + y;
+                if (hashRef[i] != hashNew[i] && !flatNew[i]) { changedLines++; break; }
+            }
+        }
+
+        // A narrow strip changed while most of the window stayed exactly as it was: something
+        // changed in place (the row under the mouse lit up, a tooltip appeared). In a list
+        // whose rows look alike, that can look just like a one-row scroll, so it isn't one.
+        bool changeInPlace = changedLines < H / 4 && unchangedDetailed >= 2 * changedDetailed;
 
         if (changed == 0)
         {
@@ -160,17 +187,23 @@ internal sealed class Tracker : IDisposable
             spare = frame;
             locked = true;
             frames++;
+            LastDecision = "unchanged";
             return false;
         }
 
         // A shift wins if it explains a good share of the changed rows that match anything at
         // all (rows spoiled by a fixed sidebar or an animation match nothing and don't count),
-        // and isn't a tiny fraction of everything that changed.
-        int shift = FindShift(bands, out int support, out int matchable);
+        // and at least MinExplained percent of everything that changed (a page that's still
+        // loading changes a lot, and a list of look-alike rows always lines up somewhere).
+        int shift = FindShift(bands, out int support, out int matchable, out int runnerUp, out int runnerUpSupport);
         bool scrolled = shift != 0
             && support >= 4
             && support >= matchable * 3 / 10
-            && support >= changedDetailed / 25;
+            && support * 100 >= changedDetailed * MinExplained
+            && !(changedLines < H / 6 && support * 4 < unchangedDetailed);
+        bool small = changedDetailed <= Math.Max(3, n / 40) || changeInPlace;
+        LastDecision = $"changed {changedDetailed}/{n} in {changedLines} lines, unchanged {unchangedDetailed}, matchable {matchable} best {shift}:{support} next {runnerUp}:{runnerUpSupport} -> " +
+            (scrolled ? $"scrolled to {offset + shift}" : small ? "change in place" : "unmatched");
 
         if (scrolled)
         {
@@ -178,9 +211,9 @@ internal sealed class Tracker : IDisposable
             Accept(frame);
             locked = true;
         }
-        else if (changedDetailed <= Math.Max(3, n / 40))
+        else if (small)
         {
-            // A small change in place (hover effect, blinking caret). Nothing scrolled.
+            // A change in place (hover effect, tooltip, blinking caret). Nothing scrolled.
             Accept(frame);
             locked = true;
         }
@@ -217,7 +250,7 @@ internal sealed class Tracker : IDisposable
     }
 
     /// <summary>Finds the shift (in rows) that lines up the most changed rows of the new frame with the old one.</summary>
-    int FindShift(int bands, out int support, out int matchable)
+    int FindShift(int bands, out int support, out int matchable, out int runnerUp, out int runnerUpSupport)
     {
         matchable = 0;
         heads.Clear();
@@ -260,11 +293,17 @@ internal sealed class Tracker : IDisposable
 
         int best = 0;
         support = 0;
+        runnerUp = 0;
+        runnerUpSupport = 0;
         for (int s = 1; s < H; s++)
         {
             // Check +s and -s together so ties go to the smaller shift.
-            if (votes[H + s] > support) { support = votes[H + s]; best = s; }
-            if (votes[H - s] > support) { support = votes[H - s]; best = -s; }
+            foreach (int candidate in (ReadOnlySpan<int>)[s, -s])
+            {
+                int v = votes[H + candidate];
+                if (v > support) { runnerUp = best; runnerUpSupport = support; support = v; best = candidate; }
+                else if (v > runnerUpSupport) { runnerUp = candidate; runnerUpSupport = v; }
+            }
         }
         return best;
     }

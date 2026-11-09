@@ -7,7 +7,8 @@
 ## Snipping Tool, with vertical scrolling.
 
 **Drag past the bottom of the screen and the page scrolls with you.**<br>
-**Let go, and the whole thing is one screenshot, already on your clipboard.**
+**Let go, and the whole thing is one screenshot, already on your clipboard.**<br>
+**Works in any app that scrolls, not just your browser.**
 
 [![Download for Windows](https://img.shields.io/badge/Download-Windows%2010%20%2F%2011-2b88ff?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/glenwrhodes/SuperScreenshot/releases/latest)
 
@@ -35,6 +36,10 @@ page scrolls under your selection, faster the further you push. Or just turn the
 while you hold the button. The top of your selection slides up off the screen, the size label
 keeps counting, and when you let go you get **one clean, seamless, full-resolution image**.
 
+And it isn't a browser extension. It works from what's on the screen, so it scrolls and
+stitches **anything with a scroll bar**: web pages, File Explorer folders, terminal output,
+documents, chat history, settings pages.
+
 <div align="center">
 <img src="docs/before-after.png" alt="Side by side: Snipping Tool stops at the edge of the screen; SuperScreenshot captured the whole page in one drag" width="640">
 </div>
@@ -43,6 +48,7 @@ keeps counting, and when you let go you get **one clean, seamless, full-resoluti
 
 - 🖱️ **Feels like Snipping Tool.** Dimmed screen, crosshair, drag a box, done. Nothing new to learn.
 - 📜 **Vertical scrolling capture.** Drag to the bottom (or top) edge to auto-scroll, or use the mouse wheel mid-drag. Scroll down, back up, down again: it keeps track.
+- 🪟 **Any app, not just the browser.** It works from pixels, not from a web page's code: any browser, File Explorer, terminals, documents. If it scrolls with the mouse wheel, it can capture it.
 - 🧵 **Seamless stitching.** No doubled lines, no seams, and sticky headers, sticky footers and the browser's own toolbar aren't repeated down the page.
 - 📋 **Straight to the clipboard.** Paste into Slack, Teams, email, Word, GitHub, anywhere. Or save as PNG or JPEG.
 - ⌨️ **Win+Shift+X, anywhere.** One key over from Snipping Tool's Win+Shift+S. Lives quietly in the hidden icons tray and starts with Windows.
@@ -61,6 +67,7 @@ keeps counting, and when you let go you get **one clean, seamless, full-resoluti
 | **Auto-scroll when you drag past the edge** | ❌ | ✅ |
 | **Scroll with the mouse wheel while selecting** | ❌ | ✅ |
 | Stitches a tall page into one image | ❌ | ✅ |
+| **Scrolling capture in any app, not just a browser** | ❌ | ✅ |
 | Open source | ❌ | ✅ |
 
 ## Install
@@ -95,10 +102,8 @@ Requires Windows 10 version 2004 or later, or Windows 11 (64-bit).
 | Copy / save again | **Copy** and **Save…** in the preview window (Ctrl+C, Ctrl+S) |
 | Exit, or stop it starting with Windows | Right-click the tray icon |
 
-It works from pixels, not from the page's code, so it isn't tied to the browser. Web pages are
-where it's been tested most and works best. Other apps that scroll with the mouse wheel work
-too, though long lists of near-identical rows (like File Explorer's) can still stitch
-imperfectly. Improving that is next.
+It works on anything that scrolls vertically with the mouse wheel, in any app: web pages in
+any browser, File Explorer folders, terminal output, documents, chat history.
 
 ## FAQ
 

@@ -6,6 +6,8 @@ internal static class Log
     static readonly string? Path = Environment.GetEnvironmentVariable("SUPERSCREENSHOT_LOG");
     static readonly object Gate = new();
 
+    public static bool Enabled => Path != null;
+
     public static void Write(string message)
     {
         if (Path == null) return;

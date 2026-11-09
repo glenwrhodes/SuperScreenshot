@@ -42,7 +42,6 @@ internal sealed class CaptureSession
     // Set when the button goes down.
     Point start;
     Rectangle viewport;  // the window being scrolled, clipped to its monitor
-    Point anchor;        // where wheel turns are delivered: on the page, where the drag started
     float scale = 1f;
     Tracker? tracker;
     Thread? trackThread;
@@ -200,9 +199,6 @@ internal sealed class CaptureSession
         start = p;
         viewport = ScreenHelpers.ViewportAt(p, overlay.Handle);
         scale = ScreenHelpers.DpiScale(p);
-        anchor = new Point(
-            Math.Clamp(p.X, viewport.Left + 2, viewport.Right - 3),
-            Math.Clamp(Math.Max(p.Y, viewport.Top + viewport.Height / 3), viewport.Top + 2, viewport.Bottom - 3));
 
         // Auto-scroll only once the cursor has been away from that edge, so starting a
         // selection near the edge doesn't scroll straight away.
@@ -427,6 +423,24 @@ internal sealed class CaptureSession
     }
 
     /// <summary>
+    /// Where to turn the wheel: across the middle of the selection (the content being captured,
+    /// not a side pane), a little in from the edge the page is scrolling towards. The cursor
+    /// briefly lands there, so anything that lights up under it does so near the edge, where the
+    /// stitching doesn't take its rows from, rather than in the middle. Not right at the edge,
+    /// which is often a status bar or toolbar that ignores the wheel.
+    /// </summary>
+    Point WheelPoint(int delta)
+    {
+        var c = Cursor;
+        int left = Math.Clamp(Math.Min(start.X, c.X), viewport.Left + 2, viewport.Right - 3);
+        int right = Math.Clamp(Math.Max(start.X, c.X), viewport.Left + 2, viewport.Right - 3);
+        int y = delta < 0
+            ? viewport.Bottom - viewport.Height * 18 / 100   // scrolling down
+            : viewport.Top + viewport.Height * 30 / 100;     // scrolling up: below any toolbars
+        return new Point((left + right) / 2, y);
+    }
+
+    /// <summary>
     /// Sends the wheel turns waiting to go, unless a hop is still under way (then the next tick
     /// does it). Overlapping hops could read the cursor mid-hop and leave it at the anchor.
     /// </summary>
@@ -437,7 +451,7 @@ internal sealed class CaptureSession
         pendingWheel = 0;
         hopInFlight = true;
         hopStartedAt = clock.ElapsedMilliseconds;
-        ScreenHelpers.WheelAt(anchor, delta, back: Cursor);
+        ScreenHelpers.WheelAt(WheelPoint(delta), delta, back: Cursor);
     }
 
     // ---- Geometry ----
@@ -490,6 +504,8 @@ internal sealed class CaptureSession
             var state = (selection, size, above, below, autoDirection);
             if (state.Equals(lastDrawn)) return;
             lastDrawn = state;
+            if (Log.Enabled)
+                Log.Write($"draw {size.Width}x{size.Height} on screen {selection} cursor {Cursor} offset {tracker?.Offset} hop {hopInFlight} auto {autoDirection} | {tracker?.LastDecision}");
             overlay.Render(g => DrawSelection(g, selection, size, above, below));
         }
         else
