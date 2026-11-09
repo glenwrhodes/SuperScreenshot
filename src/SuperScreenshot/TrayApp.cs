@@ -66,13 +66,28 @@ internal sealed class TrayApp : ApplicationContext
     /// <summary>Called when another copy of the app was started: show this one instead.</summary>
     public void ShowFromOtherInstance() => form.BeginInvoke(form.ShowWindow);
 
+    /// <summary>Called when "SuperScreenshot --exit" was run (the uninstaller does this).</summary>
+    public void ExitFromOtherInstance()
+    {
+        Log.Write("exit requested by another copy");
+        form.BeginInvoke(Exit);
+    }
+
+    bool exiting;
+
     void Exit()
     {
+        if (exiting) return; // closing the window below raises FormClosed, which lands here again
+        exiting = true;
+        Log.Write("exit: start");
         hotkey?.Dispose();
         tray.Visible = false;
         tray.Dispose();
+        Log.Write("exit: tray removed");
         form.CloseForReal();
+        Log.Write("exit: window closed");
         ExitThread();
+        Log.Write("exit: message loop told to stop");
     }
 
     // ---- Settings ----
