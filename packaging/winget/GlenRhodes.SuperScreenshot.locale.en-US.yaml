@@ -16,6 +16,7 @@ ShortDescription: Snipping Tool, with vertical scrolling. Drag past the bottom o
 Description: |-
   SuperScreenshot works like Snipping Tool: press Win+Shift+X, drag a box, and the screenshot is copied to the clipboard.
   The difference is that it scrolls. Drag into the bottom (or top) edge of a window and the page scrolls under your selection, or turn the mouse wheel while holding the button. When you let go you get one seamless, full-resolution image of the whole thing.
+  It works from what's on the screen, not from a web page's code, so it captures any app that scrolls: browsers, File Explorer, terminals, documents.
   It runs in the notification area, starts with Windows, and never uses the network.
 Moniker: superscreenshot
 Tags:
