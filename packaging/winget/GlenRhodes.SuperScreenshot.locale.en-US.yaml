@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 
 PackageIdentifier: GlenRhodes.SuperScreenshot
-PackageVersion: 1.0.0
+PackageVersion: 1.0.1
 PackageLocale: en-US
 Publisher: Glen Rhodes
 PublisherUrl: https://github.com/glenwrhodes
@@ -29,6 +29,6 @@ Tags:
 - snip
 - clipboard
 - productivity
-ReleaseNotesUrl: https://github.com/glenwrhodes/SuperScreenshot/releases/tag/v1.0.0
+ReleaseNotesUrl: https://github.com/glenwrhodes/SuperScreenshot/releases/tag/v1.0.1
 ManifestType: defaultLocale
 ManifestVersion: 1.10.0
