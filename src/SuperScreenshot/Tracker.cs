@@ -13,6 +13,10 @@ namespace SuperScreenshot;
 /// with the most votes wins. Rows that stay put at the top or bottom while everything else
 /// moves are a sticky header or footer and are left out of the stitched image.
 ///
+/// Every frame is then checked against the stitched image itself, not just the frame before
+/// it: if it lines up better a little higher or lower there, that wins. Small errors can't
+/// pile up that way, and going back over a part already captured lands exactly on it.
+///
 /// Which view of a row is kept: every row passes through the window several times, and the
 /// view taken when it was nearest the middle of the window wins (a newer view wins a tie).
 /// The edges are where things go wrong: rows scrolling in at the leading edge may not be
@@ -51,7 +55,14 @@ internal sealed class Tracker : IDisposable
     {
         public readonly int[] Pixels = new int[width];
         public int Quality = -1;
+
+        // The row's hash in each band, for matching frames against the stitched image.
+        public readonly ulong[] Hash = new ulong[MaxBands];
+        public readonly bool[] Flat = new bool[MaxBands];
+        public (int x0, int x1, int bands) HashKey = NoKey;
     }
+
+    static readonly (int x0, int x1, int bands) NoKey = (-1, -1, -1);
 
     int[]? reference;   // last frame whose position we know
     int[]? spare;       // buffer to reuse for the next grab
@@ -68,7 +79,13 @@ internal sealed class Tracker : IDisposable
     int[] chain = [];
     readonly int[] votes;
     readonly Dictionary<ulong, int> heads = new();
-    (int x0, int x1, int bands) refKey = (-1, -1, -1);
+    (int x0, int x1, int bands) refKey = NoKey;
+    (int x0, int x1, int bands) frameKey = NoKey;
+
+    // Scratch space for matching against the stitched image.
+    readonly Dictionary<ulong, int> docHeads = new();
+    int[] docChain = [];
+    readonly int[] docVotes;
 
     public Tracker(Rectangle viewport, Func<int[]?, int[]>? source = null)
     {
@@ -85,6 +102,7 @@ internal sealed class Tracker : IDisposable
             grab = source;
         }
         votes = new int[2 * H + 1];
+        docVotes = new int[2 * (H / 2) + 1];
         SetHashRange(0, W);
     }
 
@@ -155,6 +173,7 @@ internal sealed class Tracker : IDisposable
             refKey = (x0, x1, bands);
         }
         HashRows(frame, x0, x1, bands, hashNew, flatNew);
+        frameKey = (x0, x1, bands);
 
         int changed = 0, changedDetailed = 0, unchangedDetailed = 0, changedLines = 0;
         for (int i = 0; i < n; i++)
@@ -202,16 +221,28 @@ internal sealed class Tracker : IDisposable
             && support * 100 >= changedDetailed * MinExplained
             && !(changedLines < H / 6 && support * 4 < unchangedDetailed);
         bool small = changedDetailed <= Math.Max(3, n / 40) || changeInPlace;
-        LastDecision = $"changed {changedDetailed}/{n} in {changedLines} lines, unchanged {unchangedDetailed}, matchable {matchable} best {shift}:{support} next {runnerUp}:{runnerUpSupport} -> " +
-            (scrolled ? $"scrolled to {offset + shift}" : small ? "change in place" : "unmatched");
 
-        if (scrolled)
+        // Now check that against the stitched image. It has seen these rows in many frames,
+        // in both directions, so it catches a scroll the frame-to-frame match missed (a few
+        // short lines moving under a fixed toolbar look like a change in place) or got wrong.
+        int header = StaticRows(bands, fromTop: true);
+        int footer = StaticRows(bands, fromTop: false);
+        int guess = scrolled ? shift : 0;
+        int fix = MatchStitched(offset + guess, header, footer, bands, out int fixVotes, out int otherVotes);
+        int total = guess + fix;
+        bool moved = total != 0 && (scrolled || fix != 0);
+
+        LastDecision = $"changed {changedDetailed}/{n} in {changedLines} lines, unchanged {unchangedDetailed}, matchable {matchable} best {shift}:{support} next {runnerUp}:{runnerUpSupport}" +
+            (fix != 0 ? $", stitched image says {fix:+#;-#}:{fixVotes} (next {otherVotes})" : "") + " -> " +
+            (moved ? $"scrolled to {offset + total}" : scrolled || small ? "change in place" : "unmatched");
+
+        if (moved)
         {
-            Place(frame, shift, bands);
+            Place(frame, total, header, footer);
             Accept(frame);
             locked = true;
         }
-        else if (small)
+        else if (scrolled || small)
         {
             // A change in place (hover effect, tooltip, blinking caret). Nothing scrolled.
             Accept(frame);
@@ -256,7 +287,7 @@ internal sealed class Tracker : IDisposable
         heads.Clear();
         for (int b = 0; b < bands; b++)
         {
-            ulong salt = (ulong)(b + 1) * 0x9E3779B97F4A7C15UL;
+            ulong salt = Salt(b);
             for (int y = 0; y < H; y++)
             {
                 int i = b * H + y;
@@ -270,7 +301,7 @@ internal sealed class Tracker : IDisposable
         Array.Clear(votes);
         for (int b = 0; b < bands; b++)
         {
-            ulong salt = (ulong)(b + 1) * 0x9E3779B97F4A7C15UL;
+            ulong salt = Salt(b);
             int bandStart = b * H;
             for (int y = 0; y < H; y++)
             {
@@ -308,11 +339,83 @@ internal sealed class Tracker : IDisposable
         return best;
     }
 
-    /// <summary>Writes the newly revealed rows of a frame that scrolled by <paramref name="shift"/>.</summary>
-    void Place(int[] frame, int shift, int bands)
+    /// <summary>
+    /// Lines the new frame up against the stitched image, near document row <paramref name="at"/>
+    /// (where the frame-to-frame match put it). Returns how far off that was, or 0 if it was right
+    /// or the stitched image can't tell.
+    /// </summary>
+    int MatchStitched(int at, int header, int footer, int bands, out int bestVotes, out int secondVotes)
     {
-        int header = StaticRows(bands, fromTop: true);
-        int footer = StaticRows(bands, fromTop: false);
+        bestVotes = secondVotes = 0;
+        int reach = H / 2;
+        int from = Math.Max(covTop, at + header - reach), to = Math.Min(covBottom, at + H - footer + reach);
+        int len = to - from;
+        if (len <= 0 || header >= H - footer) return 0;
+
+        if (docChain.Length < bands * len) docChain = new int[bands * len];
+        docHeads.Clear();
+        for (int r = from; r < to; r++)
+        {
+            if (!rows.TryGetValue(r, out var row) || row.Quality < 0) continue;
+            if (row.HashKey != frameKey)
+            {
+                for (int b = 0; b < bands; b++)
+                    (row.Hash[b], row.Flat[b]) = HashRow(row.Pixels, 0, frameKey.x0, frameKey.x1, bands, b);
+                row.HashKey = frameKey;
+            }
+            for (int b = 0; b < bands; b++)
+            {
+                if (row.Flat[b]) continue;
+                ulong key = row.Hash[b] ^ Salt(b);
+                int i = b * len + (r - from);
+                docChain[i] = docHeads.TryGetValue(key, out int head) ? head : -1;
+                docHeads[key] = i;
+            }
+        }
+        if (docHeads.Count == 0) return 0;
+
+        Array.Clear(docVotes);
+        for (int b = 0; b < bands; b++)
+        {
+            ulong salt = Salt(b);
+            for (int y = header; y < H - footer; y++)
+            {
+                int i = b * H + y;
+                if (flatNew[i] || !docHeads.TryGetValue(hashNew[i] ^ salt, out int head)) continue;
+
+                int count = 0;
+                for (int k = head; k >= 0 && count <= MaxRepeats; k = docChain[k]) count++;
+                if (count > MaxRepeats) continue;
+
+                for (int k = head; k >= 0; k = docChain[k])
+                {
+                    int d = from + k % len - (at + y);
+                    if (d >= -reach && d <= reach) docVotes[d + reach]++;
+                }
+            }
+        }
+
+        // The winner must be clear: twice the rows of any other position, the guess included.
+        int best = 0;
+        bestVotes = docVotes[reach];
+        for (int s = 1; s <= reach; s++)
+        {
+            foreach (int candidate in (ReadOnlySpan<int>)[s, -s])
+            {
+                int v = docVotes[candidate + reach];
+                if (v > bestVotes) { secondVotes = bestVotes; bestVotes = v; best = candidate; }
+                else if (v > secondVotes) secondVotes = v;
+            }
+        }
+        if (best == 0 || bestVotes < 8 || bestVotes < 2 * secondVotes) return 0;
+        return best;
+    }
+
+    static ulong Salt(int band) => (ulong)(band + 1) * 0x9E3779B97F4A7C15UL;
+
+    /// <summary>Writes the newly revealed rows of a frame that scrolled by <paramref name="shift"/>.</summary>
+    void Place(int[] frame, int shift, int header, int footer)
+    {
         if (header + footer + Math.Abs(shift) >= H) header = footer = 0;
 
         int newOffset = offset + shift;
@@ -343,7 +446,7 @@ internal sealed class Tracker : IDisposable
             }
 
             int last = H - footer - 1;
-            for (int y = header; y <= last; y++) Store(y + newOffset, frame, y, Math.Min(y - header, last - y));
+            for (int y = header; y <= last; y++) StoreHashed(y + newOffset, frame, y, Math.Min(y - header, last - y));
         }
 
         offset = newOffset;
@@ -369,17 +472,32 @@ internal sealed class Tracker : IDisposable
         return count;
     }
 
-    /// <summary>Keeps this view of a row if it's at least as central as the one we have.</summary>
-    void Store(int documentRow, int[] frame, int y, int quality)
+    /// <summary>Keeps this view of a row if it's at least as central as the one we have. Returns true if it was kept.</summary>
+    bool Store(int documentRow, int[] frame, int y, int quality)
     {
         if (!rows.TryGetValue(documentRow, out var row))
         {
             row = new Row(W);
             rows[documentRow] = row;
         }
-        if (quality < row.Quality) return;
+        if (quality < row.Quality) return false;
         Array.Copy(frame, y * W, row.Pixels, 0, W);
         row.Quality = quality;
+        row.HashKey = NoKey; // hashed again when needed
+        return true;
+    }
+
+    /// <summary>Stores a row of the frame just hashed, keeping its hashes for <see cref="MatchStitched"/>.</summary>
+    void StoreHashed(int documentRow, int[] frame, int y, int quality)
+    {
+        if (!Store(documentRow, frame, y, quality)) return;
+        var row = rows[documentRow];
+        for (int b = 0; b < frameKey.bands; b++)
+        {
+            row.Hash[b] = hashNew[b * H + y];
+            row.Flat[b] = flatNew[b * H + y];
+        }
+        row.HashKey = frameKey;
     }
 
     /// <summary>Marks rows as known to be wrong (an old sticky footer), so any later view replaces them.</summary>
@@ -406,28 +524,27 @@ internal sealed class Tracker : IDisposable
     /// </summary>
     void HashRows(int[] pixels, int x0, int x1, int bands, ulong[] hashes, bool[] flat)
     {
+        for (int b = 0; b < bands; b++)
+            for (int y = 0; y < H; y++)
+                (hashes[b * H + y], flat[b * H + y]) = HashRow(pixels, y * W, x0, x1, bands, b);
+    }
+
+    /// <summary>The hash of one band of the row that starts at <paramref name="rowStart"/> in <paramref name="pixels"/>.</summary>
+    static (ulong hash, bool flat) HashRow(int[] pixels, int rowStart, int x0, int x1, int bands, int band)
+    {
         const int Mask = 0xF8F8F8;
         int span = x1 - x0;
-        for (int b = 0; b < bands; b++)
+        int i = rowStart + x0 + span * band / bands, end = rowStart + x0 + span * (band + 1) / bands;
+        int first = pixels[i] & Mask;
+        ulong hash = 14695981039346656037UL;
+        bool same = true;
+        for (; i < end; i++)
         {
-            int bx0 = x0 + span * b / bands;
-            int bx1 = x0 + span * (b + 1) / bands;
-            for (int y = 0; y < H; y++)
-            {
-                int i = y * W + bx0, end = y * W + bx1;
-                int first = pixels[i] & Mask;
-                ulong hash = 14695981039346656037UL;
-                bool same = true;
-                for (; i < end; i++)
-                {
-                    int v = pixels[i] & Mask;
-                    same &= v == first;
-                    hash = (hash ^ (uint)v) * 1099511628211UL;
-                }
-                hashes[b * H + y] = hash;
-                flat[b * H + y] = same;
-            }
+            int v = pixels[i] & Mask;
+            same &= v == first;
+            hash = (hash ^ (uint)v) * 1099511628211UL;
         }
+        return (hash, same);
     }
 
     public void Dispose() => grabber?.Dispose();

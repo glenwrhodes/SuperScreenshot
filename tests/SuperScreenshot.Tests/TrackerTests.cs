@@ -390,6 +390,53 @@ public class TrackerTests
         Assert.True(tracker.Locked);
     }
 
+    /// <summary>A page that is normal text at the top and nearly empty below <paramref name="sparseFrom"/>: a short line every so often.</summary>
+    static Page SparsePage(int height, int sparseFrom, int seed)
+    {
+        var page = new Page(height, seed);
+        var random = new Random(seed + 1);
+        for (int y = sparseFrom; y < height; y++)
+        {
+            var row = new int[W];
+            Array.Fill(row, 0xFFFFFF);
+            if ((y - sparseFrom) % 230 < 14)
+                for (int x = 60; x < 380; x++)
+                    if (random.Next(3) == 0) row[x] = random.Next(0, 0x404040);
+            page.Rows[y] = row;
+        }
+        return page;
+    }
+
+    [Fact]
+    public void ScrollingThroughANearlyEmptyArea_WithAFixedToolbar_KeepsCount()
+    {
+        // Gmail below the end of a message: a few short lines move while the browser's toolbar
+        // and the app's header stay put. That must not be taken for a change in place (which
+        // would lose the scroll and throw everything after it off), even going back up.
+        var page = SparsePage(6000, sparseFrom: 1800, seed: 21);
+        const int header = 150;
+        var path = Walk(0, 3600, seed: 13, maxStep: 60).Concat(Walk(3600, 1200, seed: 14, maxStep: 60).Skip(1)).ToList();
+        using var tracker = Run(page, path, header, footer: 0);
+
+        Assert.Equal(1200, tracker.Offset);
+        for (int d = header; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
+    [Fact]
+    public void NearlyEmptyArea_WithANarrowSelection_KeepsCount()
+    {
+        var page = SparsePage(6000, sparseFrom: 1500, seed: 22);
+        const int header = 120;
+        var path = Walk(0, 3000, seed: 15, maxStep: 45).Concat(Walk(3000, 900, seed: 16, maxStep: 90).Skip(1)).ToList();
+        var frames = new Queue<int[]>(path.Select(s => Frame(page, s, header, footer: 0)));
+        using var tracker = new Tracker(new Rectangle(0, 0, W, H), _ => frames.Dequeue());
+        tracker.SetHashRange(100, 360);
+        while (frames.Count > 0) tracker.Step();
+
+        Assert.Equal(900, tracker.Offset);
+        for (int d = header; d < tracker.CoveredBottom; d++) AssertRow(page.Rows[d], tracker.RowAt(d), d);
+    }
+
     [Fact]
     public void Crop_ReturnsTheSelectedPartOfTheStitchedPage()
     {

@@ -11,7 +11,7 @@
     <AssemblyName>SuperScreenshot</AssemblyName>
     <RootNamespace>SuperScreenshot</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Product>SuperScreenshot</Product>
     <Description>Select a region of the screen, scrolling the page as you go.</Description>
   </PropertyGroup>

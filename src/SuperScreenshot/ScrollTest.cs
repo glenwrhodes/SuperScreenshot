@@ -8,7 +8,8 @@ namespace SuperScreenshot;
 /// Developer checks of scrolling capture against a real window, without the UI.
 ///
 ///   SuperScreenshot.exe --scroll-test X Y NOTCHES OUT.png [FRAMES_DIR]
-///     Tracks the window under (X, Y), turns the wheel NOTCHES times there (negative = up),
+///     Tracks the window under (X, Y), turns the wheel NOTCHES times there (negative = up;
+///     a list like 30,-12,8 goes down, back up, then down again),
 ///     and saves everything stitched to OUT.png, with a log of every frame's decision in
 ///     OUT.png.txt. With FRAMES_DIR it also saves each grabbed frame there, for --replay.
 ///
@@ -22,10 +23,9 @@ internal static class ScrollTest
     {
         if (args.Length < 5) return 2;
         var at = new Point(int.Parse(args[1]), int.Parse(args[2]));
-        int notches = int.Parse(args[3]);
+        int[] moves = args[3].Split(',').Select(int.Parse).ToArray();
         string output = Path.GetFullPath(args[4]);
         string? framesDir = args.Length > 5 ? Path.GetFullPath(args[5]) : null;
-        int delta = notches >= 0 ? -120 : 120;
 
         var viewport = ScreenHelpers.ViewportAt(at, IntPtr.Zero);
         var log = new StringBuilder();
@@ -57,11 +57,16 @@ internal static class ScrollTest
         thread.Start();
         Thread.Sleep(300);
 
-        for (int i = 0; i < Math.Abs(notches); i++)
+        foreach (int notches in moves)
         {
-            ScreenHelpers.WheelAt(at, delta);
-            lock (log) log.AppendLine($"{clock.ElapsedMilliseconds,6} ms  -- wheel {delta}");
-            Thread.Sleep(90);
+            int delta = notches >= 0 ? -120 : 120;
+            for (int i = 0; i < Math.Abs(notches); i++)
+            {
+                ScreenHelpers.WheelAt(at, delta);
+                lock (log) log.AppendLine($"{clock.ElapsedMilliseconds,6} ms  -- wheel {delta}");
+                Thread.Sleep(90);
+            }
+            Thread.Sleep(400);
         }
         Thread.Sleep(800);
         Volatile.Write(ref stop, true);
