@@ -18,6 +18,7 @@ internal sealed class MainForm : Form
 
     Bitmap? image;
     CaptureSession? session;
+    CaptureToast? toast;
     bool starting;
     bool closingForReal;
 
@@ -160,6 +161,7 @@ internal sealed class MainForm : Form
     {
         if (session != null || starting) return;
         starting = true;
+        toast?.Dismiss(immediately: true); // never in the next screenshot
 
         bool wasVisible = Visible;
         var previousState = WindowState;
@@ -175,8 +177,12 @@ internal sealed class MainForm : Form
             session = null;
             if (result != null)
             {
-                ShowImage(result);
-                ShowWindow();
+                bool copied = ShowImage(result);
+                // Like Snipping Tool: started from the window, the window comes back with the
+                // screenshot. Started from the hotkey or tray, just a popup in the corner that
+                // leaves the focus where it was, so you can paste straight away.
+                if (wasShowing || Settings.OpenPreviewAfterCapture) ShowWindow();
+                else ShowToast(result, copied);
             }
             else if (capture.Error != null)
             {
@@ -193,7 +199,18 @@ internal sealed class MainForm : Form
         capture.Start(); // reports its own failures through Completed
     }
 
-    void ShowImage(Bitmap bitmap)
+    void ShowToast(Bitmap bitmap, bool copied)
+    {
+        toast?.Dismiss(immediately: true);
+        var popup = new CaptureToast(bitmap, copied, Cursor.Position);
+        popup.Opened += ShowWindow;
+        popup.FormClosed += (_, _) => { if (toast == popup) toast = null; };
+        toast = popup;
+        popup.Show();
+    }
+
+    /// <summary>Puts a new screenshot in the window (without showing it) and copies it. Returns true if copied.</summary>
+    bool ShowImage(Bitmap bitmap)
     {
         picture.Image = null;
         image?.Dispose();
@@ -208,7 +225,9 @@ internal sealed class MainForm : Form
         CenterPicture();
 
         string size = $"{bitmap.Width:N0} × {bitmap.Height:N0}";
-        status.Text = CopyImage(quiet: true) ? $"{size}  ·  copied to clipboard" : size;
+        bool copied = CopyImage(quiet: true);
+        status.Text = copied ? $"{size}  ·  copied to clipboard" : size;
+        return copied;
     }
 
     /// <summary>Sizes the window to show the image at 100%, within 90% of the screen.</summary>

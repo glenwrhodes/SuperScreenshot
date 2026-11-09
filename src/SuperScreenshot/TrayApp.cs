@@ -31,11 +31,18 @@ internal sealed class TrayApp : ApplicationContext
             Font = new Font(menu.Font, FontStyle.Bold),
         });
         menu.Items.Add("Open SuperScreenshot", null, (_, _) => form.ShowWindow());
+        var openPreview = new ToolStripMenuItem("Open preview after capture", null,
+            (_, _) => Settings.OpenPreviewAfterCapture = !Settings.OpenPreviewAfterCapture);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(openPreview);
         menu.Items.Add(startWithWindows);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Exit());
-        menu.Opening += (_, _) => startWithWindows.Checked = IsStartWithWindows();
+        menu.Opening += (_, _) =>
+        {
+            startWithWindows.Checked = IsStartWithWindows();
+            openPreview.Checked = Settings.OpenPreviewAfterCapture;
+        };
 
         tray = new NotifyIcon
         {

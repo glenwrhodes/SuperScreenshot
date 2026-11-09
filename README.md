@@ -50,7 +50,7 @@ documents, chat history, settings pages.
 - 📜 **Vertical scrolling capture.** Drag to the bottom (or top) edge to auto-scroll, or use the mouse wheel mid-drag. Scroll down, back up, down again: it keeps track.
 - 🪟 **Any app, not just the browser.** It works from pixels, not from a web page's code: any browser, File Explorer, terminals, documents. If it scrolls with the mouse wheel, it can capture it.
 - 🧵 **Seamless stitching.** No doubled lines, no seams, and sticky headers, sticky footers and the browser's own toolbar aren't repeated down the page.
-- 📋 **Straight to the clipboard.** Paste into Slack, Teams, email, Word, GitHub, anywhere. Or save as PNG or JPEG.
+- 📋 **Straight to the clipboard.** Paste into Slack, Teams, email, Word, GitHub, anywhere. Like Snipping Tool, a small preview pops up in the corner without stealing the focus, so you can paste right away, or click it to open, copy again or save as PNG or JPEG.
 - ⌨️ **Win+Shift+X, anywhere.** One key over from Snipping Tool's Win+Shift+S. Lives quietly in the hidden icons tray and starts with Windows.
 - 🔍 **Pixel perfect.** Per-monitor DPI aware: full resolution and crisp at 100%, 150% or 200% scaling.
 - 🪶 **Small and private.** One process, no account, no cloud, no telemetry. It never touches the network.
@@ -62,6 +62,7 @@ documents, chat history, settings pages.
 | --- | :---: | :---: |
 | Drag to select a region | ✅ | ✅ |
 | Copies to the clipboard automatically | ✅ | ✅ |
+| Preview popup in the corner, click to open | ✅ | ✅ |
 | Global shortcut | Win+Shift+S | **Win+Shift+X** |
 | **Capture more than fits on the screen** | ❌ | ✅ |
 | **Auto-scroll when you drag past the edge** | ❌ | ✅ |
@@ -99,7 +100,9 @@ Requires Windows 10 version 2004 or later, or Windows 11 (64-bit).
 | Scroll faster | Push further into the edge, or past it (onto the taskbar is fine) |
 | Go back up | Drag to the top edge, or wheel up |
 | Cancel | **Esc** or right-click |
-| Copy / save again | **Copy** and **Save…** in the preview window (Ctrl+C, Ctrl+S) |
+| Paste it | Just paste (Ctrl+V): it's already on the clipboard, and the app you were in still has the focus |
+| Open, copy again or save | Click the popup in the bottom-right corner, then **Copy** or **Save…** (Ctrl+C, Ctrl+S) |
+| Always open the preview instead | Right-click the tray icon → **Open preview after capture** |
 | Exit, or stop it starting with Windows | Right-click the tray icon |
 
 It works on anything that scrolls vertically with the mouse wheel, in any app: web pages in
@@ -179,6 +182,8 @@ installer and the portable zip to a GitHub release.
 | `TrayApp.cs` | Tray icon and menu, start with Windows, the hotkey |
 | `GlobalHotkey.cs` | Registers Win+Shift+X |
 | `MainForm.cs` | The preview window: New / Copy / Save |
+| `CaptureToast.cs` | The popup in the corner after a capture (never takes the focus) |
+| `Settings.cs` | Preferences in HKCU\Software\SuperScreenshot |
 | `CaptureSession.cs` | One capture: overlay, selection, auto-scroll, wheel redirect |
 | `Tracker.cs` | Follows the scrolling and stitches the tall image |
 | `Overlay.cs` | Layered overlay window, input hook thread, crosshair cursors |
