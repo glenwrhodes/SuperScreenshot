@@ -95,8 +95,10 @@ Requires Windows 10 version 2004 or later, or Windows 11 (64-bit).
 | Copy / save again | **Copy** and **Save…** in the preview window (Ctrl+C, Ctrl+S) |
 | Exit, or stop it starting with Windows | Right-click the tray icon |
 
-It works on anything that scrolls vertically with the mouse wheel: web pages in any browser,
-documents, chat history, email threads, code, spreadsheets, settings pages.
+It works from pixels, not from the page's code, so it isn't tied to the browser. Web pages are
+where it's been tested most and works best. Other apps that scroll with the mouse wheel work
+too, though long lists of near-identical rows (like File Explorer's) can still stitch
+imperfectly. Improving that is next.
 
 ## FAQ
 
